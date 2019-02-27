@@ -17,7 +17,7 @@ class AdaBound(tf.keras.optimizers.Optimizer):
                  beta_1=0.9,
                  beta_2=0.999,
                  final_lr=0.1, 
-                 eps=None,
+                 epsilon=None,
                  decay=0, 
                  amsbound=False,
                **kwargs):
@@ -31,9 +31,9 @@ class AdaBound(tf.keras.optimizers.Optimizer):
             self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
             
-        if eps is None:
-            eps = K.epsilon()
-        self.epsilon = eps
+        if epsilon is None:
+            epsilon = K.epsilon()
+        self.epsilon = epsilon
         self.amsbound = amsbound
         
     def get_updates(self, loss, params):
@@ -41,6 +41,9 @@ class AdaBound(tf.keras.optimizers.Optimizer):
         self.updates = [state_ops.assign_add(self.iterations, 1)]
 
         t = math_ops.cast(self.iterations, K.floatx()) + 1
+        
+        lr_t = self.lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
+             (1. - K.pow(self.beta_1, t)))
 
         ms = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
         vs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
@@ -54,21 +57,23 @@ class AdaBound(tf.keras.optimizers.Optimizer):
             m_t = (self.beta_1 * m) + (1. - self.beta_1) * g
             v_t = (self.beta_2 * v) + (1. - self.beta_2) * math_ops.square(g)
             if self.amsbound:
-                vhat_t = math_ops.maximum(vhat, v_t)
-                denom = K.sqrt(vhat_t)
+                vhat_t = K.maximum(vhat, v_t)
+                denom = K.sqrt(vhat_t) + self.epsilon
                 self.updates.append(state_ops.assign(vhat, vhat_t))
             else:
-                denom = K.sqrt(v_t)
+                denom = K.sqrt(v_t) + self.epsilon
 
+            
+            lower_bound = self.final_lr * (1 - 1 / ((1-self.beta_2) * (t + 1)))
+            upper_bound = self.final_lr * (1 + 1 / ((1-self.beta_2) * (t + 1)))
+            eta_hat = K.minimum(K.maximum(lr_t/denom, lower_bound), upper_bound)
+#             eta = eta_hat / K.sqrt(t)
+            
+            p_t = p -  m_t * eta_hat
+        
             self.updates.append(state_ops.assign(m, m_t))
             self.updates.append(state_ops.assign(v, v_t))
             
-            lower_bound = self.final_lr * (1 - 1 / ((1-self.beta_2) * (t + 1)))
-            upper_bound = self.final_lr * (1 + 1 / ((1-self.beta_2) * (t +1)))
-            denom = K.minimum(K.maximum(self.lr/denom, lower_bound), upper_bound)
-            denom *= K.sqrt(t)
-            
-            p_t = p - m_t / (denom + self.epsilon)
             new_p = p_t
 
             # Apply constraints.
