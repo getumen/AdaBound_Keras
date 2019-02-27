@@ -15,3 +15,6 @@ ICLR 2019のAdaBoundという最適化手法を実装しました．
 
 # 動かしてみる
 https://colab.research.google.com/drive/1FKD0eXUWA3CrsQjkDovxYcojj2aPXrxI
+
+# 論文著者実装によるPytorch版
+https://github.com/Luolc/AdaBound
