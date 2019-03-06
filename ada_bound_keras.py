@@ -20,6 +20,7 @@ class AdaBound(tf.keras.optimizers.Optimizer):
                  epsilon=None,
                  decay=0, 
                  amsbound=False,
+                 weight_decay=0.0,
                **kwargs):
         super(AdaBound, self).__init__(**kwargs)
         with K.name_scope(self.__class__.__name__):
@@ -27,9 +28,11 @@ class AdaBound(tf.keras.optimizers.Optimizer):
             self.lr = K.variable(lr, name='lr')
             self.beta_1 = K.variable(beta_1, name='beta_1')
             self.beta_2 = K.variable(beta_2, name='beta_2')
-            self.final_lr = K.variable(final_lr, name='final_lr')
             self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
+        self.weight_decay = float(weight_decay)
+        self.base_lr = float(lr)
+        self.final_lr = final_lr
             
         if epsilon is None:
             epsilon = K.epsilon()
@@ -42,8 +45,17 @@ class AdaBound(tf.keras.optimizers.Optimizer):
 
         t = math_ops.cast(self.iterations, K.floatx()) + 1
         
-        lr_t = self.lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
-             (1. - K.pow(self.beta_1, t)))
+        lr_t = self.lr
+        if self.initial_decay > 0:
+            lr_t = lr_t * (1. / (1. + self.decay * K.cast(self.iterations,
+                                                      K.dtype(self.decay))))
+            
+        lr_t = lr_t * (K.sqrt(1. - K.pow(self.beta_2, t)) /
+                          (1. - K.pow(self.beta_1, t)))
+
+        final_lr = self.final_lr * lr_t / self.base_lr
+        lower_bound = final_lr * (1 - 1 / ((1-self.beta_2) * (t + 1)))
+        upper_bound = final_lr * (1 + 1 / ((1-self.beta_2) * t))
 
         ms = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
         vs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
@@ -56,6 +68,10 @@ class AdaBound(tf.keras.optimizers.Optimizer):
         for p, g, m, v, vhat in zip(params, grads, ms, vs, vhats):
             m_t = (self.beta_1 * m) + (1. - self.beta_1) * g
             v_t = (self.beta_2 * v) + (1. - self.beta_2) * math_ops.square(g)
+            
+            if self.weight_decay != 0.:
+                g += self.weight_decay * K.stop_gradient(p)
+                
             if self.amsbound:
                 vhat_t = K.maximum(vhat, v_t)
                 denom = K.sqrt(vhat_t) + self.epsilon
@@ -63,10 +79,7 @@ class AdaBound(tf.keras.optimizers.Optimizer):
             else:
                 denom = K.sqrt(v_t) + self.epsilon
 
-            
-            lower_bound = self.final_lr * (1 - 1 / ((1-self.beta_2) * (t + 1)))
-            upper_bound = self.final_lr * (1 + 1 / ((1-self.beta_2) * (t + 1)))
-            eta_hat = K.minimum(K.maximum(lr_t/denom, lower_bound), upper_bound)
+            eta_hat = tf.clip_by_value(lr_t/denom, lower_bound, upper_bound)
 #             eta = eta_hat / K.sqrt(t)
             
             p_t = p -  m_t * eta_hat
@@ -88,8 +101,10 @@ class AdaBound(tf.keras.optimizers.Optimizer):
             'lr': float(K.get_value(self.lr)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
-            'final_lr': float(K.get_value(self.final_lr)),
+            'final_lr': self.final_lr,
             'epsilon': self.epsilon,
+            'amsbound': self.amsbound,
+            'decay': float(K.get_value(self.decay)),
             'amsbound': self.amsbound,
             }
         base_config = super(AdaBound, self).get_config()
